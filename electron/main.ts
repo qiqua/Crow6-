@@ -67,11 +67,77 @@ ipcMain.handle('project:open-directory', async () => {
   };
 });
 
+ipcMain.handle('project:read-file', async (_event, filePath: string) => {
+  if (!filePath) {
+    return null;
+  }
+
+  const normalizedPath = path.normalize(filePath);
+  const fileStats = await fs.stat(normalizedPath);
+
+  if (!fileStats.isFile() || fileStats.size > 512 * 1024) {
+    return {
+      path: normalizedPath,
+      content: '',
+      error: 'File is too large or not readable as a preview.',
+    };
+  }
+
+  return {
+    path: normalizedPath,
+    content: await fs.readFile(normalizedPath, 'utf8'),
+  };
+});
+
+ipcMain.handle('project:search-files', async (_event, rootPath: string, query: string) => {
+  const trimmedQuery = query.trim();
+
+  if (!rootPath || trimmedQuery.length < 2) {
+    return [];
+  }
+
+  const files = await collectSearchableFiles(path.normalize(rootPath));
+  const normalizedQuery = trimmedQuery.toLowerCase();
+  const results: SearchResult[] = [];
+
+  for (const filePath of files) {
+    if (results.length >= 40) {
+      break;
+    }
+
+    try {
+      const content = await fs.readFile(filePath, 'utf8');
+      const lines = content.split(/\r?\n/);
+
+      for (let index = 0; index < lines.length && results.length < 40; index += 1) {
+        const line = lines[index];
+        if (line.toLowerCase().includes(normalizedQuery)) {
+          results.push({
+            filePath,
+            line: index + 1,
+            preview: line.trim().slice(0, 180),
+          });
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return results;
+});
+
 type FileTreeNode = {
   name: string;
   path: string;
   type: 'file' | 'directory';
   children?: FileTreeNode[];
+};
+
+type SearchResult = {
+  filePath: string;
+  line: number;
+  preview: string;
 };
 
 const ignoredNames = new Set([
@@ -83,6 +149,20 @@ const ignoredNames = new Set([
   '.next',
   '.turbo',
   'coverage',
+]);
+
+const searchableExtensions = new Set([
+  '.cjs',
+  '.css',
+  '.html',
+  '.js',
+  '.json',
+  '.jsx',
+  '.md',
+  '.mjs',
+  '.ts',
+  '.tsx',
+  '.txt',
 ]);
 
 async function readDirectoryTree(rootPath: string, depth = 0): Promise<FileTreeNode[]> {
@@ -118,4 +198,38 @@ async function readDirectoryTree(rootPath: string, depth = 0): Promise<FileTreeN
   );
 
   return nodes;
+}
+
+async function collectSearchableFiles(rootPath: string, depth = 0): Promise<string[]> {
+  if (depth > 5) {
+    return [];
+  }
+
+  const entries = await fs.readdir(rootPath, { withFileTypes: true });
+  const files: string[] = [];
+
+  for (const entry of entries) {
+    if (ignoredNames.has(entry.name) || files.length >= 400) {
+      continue;
+    }
+
+    const entryPath = path.join(rootPath, entry.name);
+
+    if (entry.isDirectory()) {
+      files.push(...(await collectSearchableFiles(entryPath, depth + 1)));
+      continue;
+    }
+
+    const extension = path.extname(entry.name).toLowerCase();
+    if (!searchableExtensions.has(extension)) {
+      continue;
+    }
+
+    const fileStats = await fs.stat(entryPath);
+    if (fileStats.size <= 256 * 1024) {
+      files.push(entryPath);
+    }
+  }
+
+  return files.slice(0, 400);
 }

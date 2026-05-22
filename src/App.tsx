@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Bot, Check, ChevronRight, Circle, Clipboard, Code2, File, Folder, GitCompareArrows, KeyRound, Layers3, Loader2, MessageSquareText, MonitorPlay, Play, Rocket, Search, Send, Settings2, ShieldCheck, Sparkles, TerminalSquare, Zap } from 'lucide-react';
 import { agents, codePreview, commandSuggestions, demoTree, diffPreview, modelOptions, navItems, skills, taskLogs, type NavSection, type TreeNode } from './data';
 
@@ -9,6 +9,18 @@ type Project = {
 };
 
 type Skill = typeof skills[number];
+
+type FilePreview = {
+  path: string;
+  content: string;
+  error?: string;
+};
+
+type SearchResult = {
+  filePath: string;
+  line: number;
+  preview: string;
+};
 
 export function App() {
   const [project, setProject] = useState<Project>({
@@ -25,8 +37,42 @@ export function App() {
   const [prompt, setPrompt] = useState('把登录页面改成现代 SaaS 风格，并增加 loading 状态。');
   const [applied, setApplied] = useState(false);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+  const [filePreview, setFilePreview] = useState<FilePreview | null>(null);
+  const [isReadingFile, setIsReadingFile] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('login');
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   const changedLines = useMemo(() => diffPreview.filter((line) => line.type !== 'same').length, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadFilePreview() {
+      if (!window.crow6 || !isAbsolutePath(activeFile)) {
+        setFilePreview(null);
+        return;
+      }
+
+      setIsReadingFile(true);
+      try {
+        const preview = await window.crow6.readFile(activeFile);
+        if (!isCancelled) {
+          setFilePreview(preview);
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsReadingFile(false);
+        }
+      }
+    }
+
+    void loadFilePreview();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeFile]);
 
   async function handleOpenProject() {
     if (!window.crow6) {
@@ -61,6 +107,27 @@ export function App() {
     void navigator.clipboard?.writeText(command);
   }
 
+  async function handleProjectSearch() {
+    if (!window.crow6 || !isAbsolutePath(project.path)) {
+      setSearchResults([
+        {
+          filePath: 'src/pages/Login.tsx',
+          line: 1,
+          preview: 'function LoginPage() {',
+        },
+      ]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const results = await window.crow6.searchFiles(project.path, searchQuery);
+      setSearchResults(results);
+    } finally {
+      setIsSearching(false);
+    }
+  }
+
   return (
     <div className="min-h-screen overflow-hidden bg-surface text-slate-100">
       <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_34%),radial-gradient(circle_at_top_right,rgba(168,85,247,0.14),transparent_32%)]" />
@@ -71,8 +138,8 @@ export function App() {
           <TopBar project={project} isOpening={isOpening} selectedModel={selectedModel} onModelChange={setSelectedModel} onOpenProject={handleOpenProject} onOpenSettings={() => setActiveSection('settings')} />
 
           <section className="grid min-h-0 flex-1 grid-cols-[300px_minmax(420px,1fr)_390px] gap-4 p-4">
-            <FileExplorer project={project} activeFile={activeFile} onSelectFile={setActiveFile} />
-            <EditorPanel activeFile={activeFile} activeSection={activeSection} changedLines={changedLines} applied={applied} selectedModel={selectedModel} selectedSkill={selectedSkill} copiedCommand={copiedCommand} onApply={() => setApplied(true)} onSkillSelect={handleSkillSelect} onCopyCommand={handleCopyCommand} />
+            <FileExplorer project={project} activeFile={activeFile} searchQuery={searchQuery} searchResults={searchResults} isSearching={isSearching} onSelectFile={setActiveFile} onSearchQueryChange={setSearchQuery} onSearch={handleProjectSearch} />
+            <EditorPanel activeFile={activeFile} activeSection={activeSection} changedLines={changedLines} applied={applied} selectedModel={selectedModel} selectedSkill={selectedSkill} copiedCommand={copiedCommand} filePreview={filePreview} isReadingFile={isReadingFile} onApply={() => setApplied(true)} onSkillSelect={handleSkillSelect} onCopyCommand={handleCopyCommand} />
             <AiPanel activeTab={activeTab} prompt={prompt} selectedSkill={selectedSkill} onPromptChange={setPrompt} onTabChange={setActiveTab} onSkillSelect={handleSkillSelect} />
           </section>
 
@@ -136,7 +203,25 @@ function TopBar({ project, isOpening, selectedModel, onModelChange, onOpenProjec
   );
 }
 
-function FileExplorer({ project, activeFile, onSelectFile }: { project: Project; activeFile: string; onSelectFile: (path: string) => void }) {
+function FileExplorer({
+  project,
+  activeFile,
+  searchQuery,
+  searchResults,
+  isSearching,
+  onSelectFile,
+  onSearchQueryChange,
+  onSearch,
+}: {
+  project: Project;
+  activeFile: string;
+  searchQuery: string;
+  searchResults: SearchResult[];
+  isSearching: boolean;
+  onSelectFile: (path: string) => void;
+  onSearchQueryChange: (query: string) => void;
+  onSearch: () => void;
+}) {
   return (
     <section className="min-h-0 rounded-3xl border border-borderSoft bg-panel/80 p-4 shadow-2xl backdrop-blur-xl">
       <div className="mb-4 flex items-center justify-between">
@@ -153,7 +238,24 @@ function FileExplorer({ project, activeFile, onSelectFile }: { project: Project;
         </div>
         ignoring node_modules, .git, dist, build, .env
       </div>
-      <div className="custom-scroll max-h-[calc(100vh-260px)] overflow-auto pr-1">
+      <div className="mb-4 rounded-2xl border border-borderSoft bg-black/20 p-2">
+        <div className="flex items-center gap-2">
+          <input value={searchQuery} onChange={(event) => onSearchQueryChange(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && onSearch()} className="min-w-0 flex-1 bg-transparent px-2 py-1 text-sm outline-none placeholder:text-slate-600" placeholder="Search files..." />
+          <button onClick={onSearch} className="rounded-xl bg-sky-400 px-3 py-1.5 text-xs font-semibold text-slate-950">
+            {isSearching ? '...' : 'Go'}
+          </button>
+        </div>
+        {searchResults.length > 0 ? (
+          <div className="mt-2 space-y-1 border-t border-borderSoft pt-2">
+            {searchResults.slice(0, 4).map((result) => (
+              <button key={`${result.filePath}-${result.line}`} onClick={() => onSelectFile(result.filePath)} className="block w-full truncate rounded-lg px-2 py-1 text-left text-xs text-slate-400 hover:bg-white/5">
+                <span className="text-sky-200">{result.filePath}</span>:{result.line}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <div className="custom-scroll max-h-[calc(100vh-350px)] overflow-auto pr-1">
         {project.tree.map((node) => (
           <TreeItem key={node.path} node={node} activeFile={activeFile} onSelectFile={onSelectFile} />
         ))}
@@ -185,6 +287,8 @@ function EditorPanel({
   selectedModel,
   selectedSkill,
   copiedCommand,
+  filePreview,
+  isReadingFile,
   onApply,
   onSkillSelect,
   onCopyCommand,
@@ -196,6 +300,8 @@ function EditorPanel({
   selectedModel: string;
   selectedSkill: Skill;
   copiedCommand: string | null;
+  filePreview: FilePreview | null;
+  isReadingFile: boolean;
   onApply: () => void;
   onSkillSelect: (skill: Skill) => void;
   onCopyCommand: (command: string) => void;
@@ -226,20 +332,21 @@ function EditorPanel({
       ) : activeSection === 'agents' ? (
         <AgentOverview />
       ) : (
-        <DiffWorkspace activeSection={activeSection} applied={applied} onApply={onApply} onCopyCommand={onCopyCommand} />
+        <DiffWorkspace activeSection={activeSection} applied={applied} filePreview={filePreview} isReadingFile={isReadingFile} onApply={onApply} onCopyCommand={onCopyCommand} />
       )}
     </section>
   );
 }
 
-function DiffWorkspace({ activeSection, applied, onApply, onCopyCommand }: { activeSection: NavSection; applied: boolean; onApply: () => void; onCopyCommand: (command: string) => void }) {
+function DiffWorkspace({ activeSection, applied, filePreview, isReadingFile, onApply, onCopyCommand }: { activeSection: NavSection; applied: boolean; filePreview: FilePreview | null; isReadingFile: boolean; onApply: () => void; onCopyCommand: (command: string) => void }) {
   const title = activeSection === 'diff' ? 'Diff Review' : 'Workspace Preview';
+  const previewContent = filePreview?.content || codePreview;
 
   return (
     <div className="grid min-h-0 grid-cols-2 gap-0">
       <div className="min-w-0 border-r border-borderSoft p-5">
-        <PanelTitle title="Current File" subtitle="read-only preview" />
-        <pre className="custom-scroll mt-4 max-h-[calc(100vh-290px)] overflow-auto rounded-2xl border border-borderSoft bg-black/35 p-4 text-sm leading-6 text-slate-300"><code>{codePreview}</code></pre>
+        <PanelTitle title="Current File" subtitle={isReadingFile ? 'loading local file...' : filePreview?.error || 'read-only preview'} />
+        <pre className="custom-scroll mt-4 max-h-[calc(100vh-290px)] overflow-auto rounded-2xl border border-borderSoft bg-black/35 p-4 text-sm leading-6 text-slate-300"><code>{previewContent}</code></pre>
       </div>
       <div className="min-w-0 p-5">
         <div className="flex items-start justify-between gap-3">
@@ -489,6 +596,10 @@ function Field({ label, value }: { label: string; value: string }) {
       <input value={value} readOnly className="w-full rounded-2xl border border-borderSoft bg-white/[0.04] px-4 py-3 text-sm text-slate-300 outline-none" />
     </label>
   );
+}
+
+function isAbsolutePath(filePath: string) {
+  return /^[A-Za-z]:[\\/]/.test(filePath) || filePath.startsWith('/');
 }
 
 function findFirstFile(nodes: TreeNode[]): TreeNode | null {
