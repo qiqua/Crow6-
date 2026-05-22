@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Bot, Check, ChevronRight, Circle, Clipboard, Code2, File, Folder, GitCompareArrows, KeyRound, Layers3, Loader2, MessageSquareText, MonitorPlay, Play, Rocket, Search, Send, Settings2, ShieldCheck, Sparkles, TerminalSquare, Zap } from 'lucide-react';
-import { agents, codePreview, commandSuggestions, demoTree, diffPreview, modelOptions, navItems, skills, taskLogs, type AgentState, type NavSection, type TreeNode } from './data';
+import { agents, codePreview, commandSuggestions, demoScript, demoTree, diffPreview, modelOptions, navItems, skills, taskLogs, type AgentState, type NavSection, type TreeNode } from './data';
 
 type Project = {
   name: string;
@@ -45,6 +45,8 @@ type AuditEvent = {
   detail: string;
   tone: 'sky' | 'emerald' | 'amber' | 'slate';
 };
+
+type DemoStep = typeof demoScript[number];
 
 type AppSettings = {
   apiBaseUrl: string;
@@ -107,6 +109,9 @@ export function App() {
     },
   ]);
   const [patchAppliedAt, setPatchAppliedAt] = useState<string | null>(null);
+  const [patchVerified, setPatchVerified] = useState(false);
+  const [rollbackPreviewedAt, setRollbackPreviewedAt] = useState<string | null>(null);
+  const [activeDemoStep, setActiveDemoStep] = useState(0);
 
   const changedLines = useMemo(() => diffPreview.filter((line) => line.type !== 'same').length, []);
   const agentItems = useMemo(() => buildAgentStates(runState), [runState]);
@@ -171,6 +176,8 @@ export function App() {
       if (nextProject) {
         setProject(nextProject);
         setApplied(false);
+        setPatchVerified(false);
+        setRollbackPreviewedAt(null);
         const firstFile = findFirstFile(nextProject.tree);
         if (firstFile) {
           setActiveFile(firstFile.path);
@@ -197,6 +204,8 @@ export function App() {
   function handleRunPrompt() {
     setApplied(false);
     setPatchAppliedAt(null);
+    setPatchVerified(false);
+    setRollbackPreviewedAt(null);
     setRunStartedAt(new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date()));
     setActiveTab('agent');
     setActiveSection('agents');
@@ -208,8 +217,31 @@ export function App() {
     setApplied(true);
     const appliedAt = formatClock();
     setPatchAppliedAt(appliedAt);
+    setRollbackPreviewedAt(null);
     setRunState('done');
     addAuditEvent('Patch applied', `Local demo patch accepted at ${appliedAt}.`, 'emerald');
+  }
+
+  function handleVerifyPatch() {
+    setPatchVerified(true);
+    addAuditEvent('Patch verified', 'Preview checks passed: focused scope, reversible diff, no dependency changes.', 'emerald');
+  }
+
+  function handlePreviewRollback() {
+    const previewedAt = formatClock();
+    setApplied(false);
+    setPatchAppliedAt(null);
+    setRollbackPreviewedAt(previewedAt);
+    addAuditEvent('Rollback previewed', `Rollback plan generated at ${previewedAt}. No files were modified.`, 'amber');
+  }
+
+  function handleRunDemoStep(step: DemoStep, index: number) {
+    setActiveDemoStep(index);
+    setPrompt(step.prompt);
+    setActiveTab('agent');
+    setRunStartedAt(formatClock());
+    setRunState('planning');
+    addAuditEvent('Demo step started', step.title, 'sky');
   }
 
   function handleSimulateCommand(command: string) {
@@ -288,7 +320,7 @@ export function App() {
 
           <section className="grid min-h-0 flex-1 grid-cols-[300px_minmax(420px,1fr)_390px] gap-4 p-4">
             <FileExplorer project={project} activeFile={activeFile} searchQuery={searchQuery} searchResults={searchResults} isSearching={isSearching} onSelectFile={setActiveFile} onSearchQueryChange={setSearchQuery} onSearch={handleProjectSearch} />
-            <EditorPanel activeFile={activeFile} activeSection={activeSection} changedLines={changedLines} applied={applied} patchAppliedAt={patchAppliedAt} selectedModel={selectedModel} selectedSkill={selectedSkill} copiedCommand={copiedCommand} commandRun={commandRun} auditEvents={auditEvents} settings={settings} settingsSavedAt={settingsSavedAt} filePreview={filePreview} isReadingFile={isReadingFile} agentItems={agentItems} onApply={handleApplyPatch} onSkillSelect={handleSkillSelect} onCopyCommand={handleCopyCommand} onSimulateCommand={handleSimulateCommand} onModelChange={setSelectedModel} onSettingChange={handleSettingChange} onResetSettings={handleResetSettings} />
+            <EditorPanel activeFile={activeFile} activeSection={activeSection} changedLines={changedLines} applied={applied} patchAppliedAt={patchAppliedAt} patchVerified={patchVerified} rollbackPreviewedAt={rollbackPreviewedAt} selectedModel={selectedModel} selectedSkill={selectedSkill} copiedCommand={copiedCommand} commandRun={commandRun} auditEvents={auditEvents} settings={settings} settingsSavedAt={settingsSavedAt} filePreview={filePreview} isReadingFile={isReadingFile} agentItems={agentItems} activeDemoStep={activeDemoStep} runState={runState} onApply={handleApplyPatch} onVerifyPatch={handleVerifyPatch} onPreviewRollback={handlePreviewRollback} onSkillSelect={handleSkillSelect} onCopyCommand={handleCopyCommand} onSimulateCommand={handleSimulateCommand} onRunDemoStep={handleRunDemoStep} onModelChange={setSelectedModel} onSettingChange={handleSettingChange} onResetSettings={handleResetSettings} />
             <AiPanel activeTab={activeTab} prompt={prompt} selectedSkill={selectedSkill} runState={runState} agentItems={agentItems} onPromptChange={setPrompt} onTabChange={setActiveTab} onSkillSelect={handleSkillSelect} onRunPrompt={handleRunPrompt} />
           </section>
 
@@ -434,6 +466,8 @@ function EditorPanel({
   changedLines,
   applied,
   patchAppliedAt,
+  patchVerified,
+  rollbackPreviewedAt,
   selectedModel,
   selectedSkill,
   copiedCommand,
@@ -444,10 +478,15 @@ function EditorPanel({
   filePreview,
   isReadingFile,
   agentItems,
+  activeDemoStep,
+  runState,
   onApply,
+  onVerifyPatch,
+  onPreviewRollback,
   onSkillSelect,
   onCopyCommand,
   onSimulateCommand,
+  onRunDemoStep,
   onModelChange,
   onSettingChange,
   onResetSettings,
@@ -457,6 +496,8 @@ function EditorPanel({
   changedLines: number;
   applied: boolean;
   patchAppliedAt: string | null;
+  patchVerified: boolean;
+  rollbackPreviewedAt: string | null;
   selectedModel: string;
   selectedSkill: Skill;
   copiedCommand: string | null;
@@ -467,10 +508,15 @@ function EditorPanel({
   filePreview: FilePreview | null;
   isReadingFile: boolean;
   agentItems: DemoAgent[];
+  activeDemoStep: number;
+  runState: DemoRunState;
   onApply: () => void;
+  onVerifyPatch: () => void;
+  onPreviewRollback: () => void;
   onSkillSelect: (skill: Skill) => void;
   onCopyCommand: (command: string) => void;
   onSimulateCommand: (command: string) => void;
+  onRunDemoStep: (step: DemoStep, index: number) => void;
   onModelChange: (model: string) => void;
   onSettingChange: SettingChangeHandler;
   onResetSettings: () => void;
@@ -500,14 +546,40 @@ function EditorPanel({
         <SettingsView selectedModel={selectedModel} settings={settings} savedAt={settingsSavedAt} onModelChange={onModelChange} onSettingChange={onSettingChange} onReset={onResetSettings} />
       ) : activeSection === 'agents' ? (
         <AgentOverview agentItems={agentItems} />
+      ) : activeSection === 'demo' ? (
+        <DemoScriptView activeStep={activeDemoStep} runState={runState} applied={applied} patchVerified={patchVerified} selectedModel={selectedModel} onRunStep={onRunDemoStep} />
       ) : (
-        <DiffWorkspace activeSection={activeSection} applied={applied} patchAppliedAt={patchAppliedAt} filePreview={filePreview} isReadingFile={isReadingFile} onApply={onApply} onCopyCommand={onCopyCommand} />
+        <DiffWorkspace activeSection={activeSection} applied={applied} patchAppliedAt={patchAppliedAt} patchVerified={patchVerified} rollbackPreviewedAt={rollbackPreviewedAt} filePreview={filePreview} isReadingFile={isReadingFile} onApply={onApply} onVerifyPatch={onVerifyPatch} onPreviewRollback={onPreviewRollback} onCopyCommand={onCopyCommand} />
       )}
     </section>
   );
 }
 
-function DiffWorkspace({ activeSection, applied, patchAppliedAt, filePreview, isReadingFile, onApply, onCopyCommand }: { activeSection: NavSection; applied: boolean; patchAppliedAt: string | null; filePreview: FilePreview | null; isReadingFile: boolean; onApply: () => void; onCopyCommand: (command: string) => void }) {
+function DiffWorkspace({
+  activeSection,
+  applied,
+  patchAppliedAt,
+  patchVerified,
+  rollbackPreviewedAt,
+  filePreview,
+  isReadingFile,
+  onApply,
+  onVerifyPatch,
+  onPreviewRollback,
+  onCopyCommand,
+}: {
+  activeSection: NavSection;
+  applied: boolean;
+  patchAppliedAt: string | null;
+  patchVerified: boolean;
+  rollbackPreviewedAt: string | null;
+  filePreview: FilePreview | null;
+  isReadingFile: boolean;
+  onApply: () => void;
+  onVerifyPatch: () => void;
+  onPreviewRollback: () => void;
+  onCopyCommand: (command: string) => void;
+}) {
   const title = activeSection === 'diff' ? 'Diff Review' : 'Workspace Preview';
   const previewContent = filePreview?.content || codePreview;
 
@@ -540,9 +612,25 @@ function DiffWorkspace({ activeSection, applied, patchAppliedAt, filePreview, is
             Patch accepted in local preview. Audit trail updated and rollback remains available through Git diff.
           </div>
         ) : null}
+        {patchVerified ? (
+          <div className="mt-4 rounded-2xl border border-sky-400/20 bg-sky-400/10 p-4 text-sm text-sky-100">
+            Verification passed: focused patch scope, reversible diff, and no dependency changes detected.
+          </div>
+        ) : null}
+        {rollbackPreviewedAt ? (
+          <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100">
+            Rollback preview generated at {rollbackPreviewedAt}. No files were modified.
+          </div>
+        ) : null}
         <div className="mt-4 flex gap-3">
           <button onClick={() => onCopyCommand('git diff -- src/pages/Login.tsx')} className="flex-1 rounded-xl border border-borderSoft bg-white/5 px-4 py-2 text-sm text-slate-300 hover:bg-white/10">
             Copy Patch
+          </button>
+          <button onClick={onVerifyPatch} className={`flex-1 rounded-xl border px-4 py-2 text-sm font-semibold transition ${patchVerified ? 'border-sky-300/30 bg-sky-400/20 text-sky-100' : 'border-borderSoft bg-white/5 text-slate-300 hover:bg-white/10'}`}>
+            {patchVerified ? 'Verified' : 'Verify'}
+          </button>
+          <button onClick={onPreviewRollback} className="flex-1 rounded-xl border border-amber-300/30 bg-amber-400/10 px-4 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-400/20">
+            Rollback
           </button>
           <button onClick={onApply} className={`flex-1 rounded-xl px-4 py-2 text-sm font-semibold transition ${applied ? 'bg-emerald-400/20 text-emerald-100' : 'bg-emerald-400 text-slate-950 hover:bg-emerald-300'}`}>
             {applied ? 'Applied Locally' : 'Apply Changes'}
@@ -695,6 +783,55 @@ function AgentOverview({ agentItems }: { agentItems: DemoAgent[] }) {
         <StatusCard icon={<GitCompareArrows size={17} />} title="Patch Scope" value="single file" />
       </div>
       <AgentRun agentItems={agentItems} expanded />
+    </div>
+  );
+}
+
+function DemoScriptView({ activeStep, runState, applied, patchVerified, selectedModel, onRunStep }: { activeStep: number; runState: DemoRunState; applied: boolean; patchVerified: boolean; selectedModel: string; onRunStep: (step: DemoStep, index: number) => void }) {
+  return (
+    <div className="custom-scroll min-h-0 overflow-auto p-5">
+      <div className="mb-4 grid grid-cols-4 gap-3">
+        <StatusCard icon={<MonitorPlay size={17} />} title="Demo Mode" value="Investor flow" />
+        <StatusCard icon={<Bot size={17} />} title="Agent State" value={runState} />
+        <StatusCard icon={<GitCompareArrows size={17} />} title="Patch" value={applied ? 'applied' : patchVerified ? 'verified' : 'reviewing'} />
+        <StatusCard icon={<Zap size={17} />} title="Model" value={selectedModel} />
+      </div>
+      <div className="grid grid-cols-[0.9fr_1.1fr] gap-4">
+        <div className="space-y-3">
+          {demoScript.map((step, index) => {
+            const isActive = activeStep === index;
+            return (
+              <button key={step.title} onClick={() => onRunStep(step, index)} className={`w-full rounded-2xl border p-4 text-left transition ${isActive ? 'border-sky-300/50 bg-sky-400/10' : 'border-borderSoft bg-white/[0.03] hover:bg-white/[0.06]'}`}>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-sm font-semibold text-slate-100">{index + 1}. {step.title}</span>
+                  <span className="rounded-full bg-white/5 px-2 py-1 text-[11px] text-slate-500">{step.duration}</span>
+                </div>
+                <p className="text-xs leading-5 text-slate-500">{step.goal}</p>
+              </button>
+            );
+          })}
+        </div>
+        <div className="rounded-3xl border border-borderSoft bg-black/25 p-5">
+          <PanelTitle title={demoScript[activeStep].title} subtitle="script, prompt, proof point" />
+          <div className="mt-5 space-y-4">
+            <div className="rounded-2xl border border-borderSoft bg-white/[0.03] p-4">
+              <div className="mb-2 text-xs text-slate-500">Talk Track</div>
+              <p className="text-sm leading-6 text-slate-300">{demoScript[activeStep].goal}</p>
+            </div>
+            <div className="rounded-2xl border border-sky-300/20 bg-sky-400/5 p-4">
+              <div className="mb-2 text-xs text-sky-300">Prompt</div>
+              <p className="text-sm leading-6 text-slate-300">{demoScript[activeStep].prompt}</p>
+            </div>
+            <div className="rounded-2xl border border-emerald-300/20 bg-emerald-400/5 p-4">
+              <div className="mb-2 text-xs text-emerald-300">Proof Point</div>
+              <p className="text-sm leading-6 text-slate-300">{demoScript[activeStep].proof}</p>
+            </div>
+            <button onClick={() => onRunStep(demoScript[activeStep], activeStep)} className="w-full rounded-xl bg-sky-400 px-4 py-3 text-sm font-semibold text-slate-950 hover:bg-sky-300">
+              Run this demo step
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -9,7 +9,7 @@ export type TreeNode = {
 
 export type AgentState = 'done' | 'running' | 'waiting';
 
-export type NavSection = 'workspace' | 'agents' | 'diff' | 'skills' | 'commands' | 'settings';
+export type NavSection = 'workspace' | 'agents' | 'diff' | 'skills' | 'commands' | 'settings' | 'demo';
 
 export const demoTree: TreeNode[] = [
   {
@@ -94,6 +94,7 @@ export const navItems: { id: NavSection; label: string; icon: typeof FileCode2 }
   { id: 'skills', label: 'Skills', icon: Store },
   { id: 'commands', label: 'Commands', icon: TerminalSquare },
   { id: 'settings', label: 'Settings', icon: Settings },
+  { id: 'demo', label: 'Demo', icon: PlayCircle },
 ];
 
 export const codePreview = `function LoginPage() {
@@ -142,3 +143,34 @@ export const commandSuggestions = [
 ];
 
 export const modelOptions = ['deepseek-chat', 'gpt-4o-mini', 'qwen-plus', 'local-ollama'];
+
+export const demoScript = [
+  {
+    title: 'Open a real project',
+    duration: '00:30',
+    goal: 'Show local-first project scanning without uploading source code.',
+    prompt: 'Open this project and summarize the visible file tree, key entry points, and safe ignore rules.',
+    proof: 'Project Explorer shows source files while ignoring .git, node_modules, dist, build, and .env.',
+  },
+  {
+    title: 'Ask Crow6 to modify UI',
+    duration: '01:20',
+    goal: 'Demonstrate prompt-to-patch developer workflow.',
+    prompt: '把登录页面改成现代 SaaS 风格，并增加 loading 状态。',
+    proof: 'Agent Console progresses through Planner, Codebase, Engineer, Reviewer, and Tester states.',
+  },
+  {
+    title: 'Review focused diff',
+    duration: '00:50',
+    goal: 'Prove changes are patch-first and reviewable before apply.',
+    prompt: 'Review the generated patch and identify rollback risk before applying it.',
+    proof: 'Diff Workspace shows added and removed lines with Apply, Verify, Rollback, and Copy Patch actions.',
+  },
+  {
+    title: 'Run safe command preview',
+    duration: '00:40',
+    goal: 'Show command suggestions without unsafe automatic execution.',
+    prompt: 'Suggest the safest build verification command and explain why it should run as a dry run first.',
+    proof: 'Commands panel displays Copy and Dry Run actions plus an audit trail.',
+  },
+];
