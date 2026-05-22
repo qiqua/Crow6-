@@ -31,6 +31,21 @@ type DemoAgent = {
   output: string;
 };
 
+type CommandRunStatus = 'idle' | 'running' | 'completed';
+
+type CommandRun = {
+  command: string;
+  status: CommandRunStatus;
+  output: string[];
+};
+
+type AuditEvent = {
+  time: string;
+  title: string;
+  detail: string;
+  tone: 'sky' | 'emerald' | 'amber' | 'slate';
+};
+
 type AppSettings = {
   apiBaseUrl: string;
   apiKeySource: string;
@@ -78,6 +93,20 @@ export function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [runState, setRunState] = useState<DemoRunState>('idle');
   const [runStartedAt, setRunStartedAt] = useState<string | null>(null);
+  const [commandRun, setCommandRun] = useState<CommandRun>({
+    command: '',
+    status: 'idle',
+    output: ['Crow6 command sandbox ready. Commands are copied or simulated before any real execution.'],
+  });
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([
+    {
+      time: 'ready',
+      title: 'Safety guard enabled',
+      detail: 'Commands require copy or dry-run confirmation in this preview.',
+      tone: 'sky',
+    },
+  ]);
+  const [patchAppliedAt, setPatchAppliedAt] = useState<string | null>(null);
 
   const changedLines = useMemo(() => diffPreview.filter((line) => line.type !== 'same').length, []);
   const agentItems = useMemo(() => buildAgentStates(runState), [runState]);
@@ -162,19 +191,57 @@ export function App() {
   function handleCopyCommand(command: string) {
     setCopiedCommand(command);
     void navigator.clipboard?.writeText(command);
+    addAuditEvent('Command copied', command, 'sky');
   }
 
   function handleRunPrompt() {
     setApplied(false);
+    setPatchAppliedAt(null);
     setRunStartedAt(new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date()));
     setActiveTab('agent');
     setActiveSection('agents');
     setRunState('planning');
+    addAuditEvent('Agent task started', prompt, 'amber');
   }
 
   function handleApplyPatch() {
     setApplied(true);
+    const appliedAt = formatClock();
+    setPatchAppliedAt(appliedAt);
     setRunState('done');
+    addAuditEvent('Patch applied', `Local demo patch accepted at ${appliedAt}.`, 'emerald');
+  }
+
+  function handleSimulateCommand(command: string) {
+    const startedAt = formatClock();
+    setCopiedCommand(command);
+    setCommandRun({
+      command,
+      status: 'running',
+      output: [`${startedAt}  queued: ${command}`, 'Running inside Crow6 dry-run sandbox...', 'No shell process is spawned during preview mode.'],
+    });
+    addAuditEvent('Dry run started', command, 'amber');
+
+    window.setTimeout(() => {
+      setCommandRun({
+        command,
+        status: 'completed',
+        output: [`${startedAt}  queued: ${command}`, 'Safety checks passed.', 'Dependency and file-system side effects blocked.', `Simulated result: ${command.includes('build') ? 'build command would run TypeScript and Vite checks.' : command.includes('git diff') ? 'diff command would inspect pending patch scope.' : 'dev server command would start local preview.'}`],
+      });
+      addAuditEvent('Dry run completed', command, 'emerald');
+    }, 900);
+  }
+
+  function addAuditEvent(title: string, detail: string, tone: AuditEvent['tone']) {
+    setAuditEvents((currentEvents) => [
+      {
+        time: formatClock(),
+        title,
+        detail,
+        tone,
+      },
+      ...currentEvents,
+    ].slice(0, 8));
   }
 
   function handleSettingChange<Key extends keyof AppSettings>(key: Key, value: AppSettings[Key]) {
@@ -221,7 +288,7 @@ export function App() {
 
           <section className="grid min-h-0 flex-1 grid-cols-[300px_minmax(420px,1fr)_390px] gap-4 p-4">
             <FileExplorer project={project} activeFile={activeFile} searchQuery={searchQuery} searchResults={searchResults} isSearching={isSearching} onSelectFile={setActiveFile} onSearchQueryChange={setSearchQuery} onSearch={handleProjectSearch} />
-            <EditorPanel activeFile={activeFile} activeSection={activeSection} changedLines={changedLines} applied={applied} selectedModel={selectedModel} selectedSkill={selectedSkill} copiedCommand={copiedCommand} settings={settings} settingsSavedAt={settingsSavedAt} filePreview={filePreview} isReadingFile={isReadingFile} agentItems={agentItems} onApply={handleApplyPatch} onSkillSelect={handleSkillSelect} onCopyCommand={handleCopyCommand} onModelChange={setSelectedModel} onSettingChange={handleSettingChange} onResetSettings={handleResetSettings} />
+            <EditorPanel activeFile={activeFile} activeSection={activeSection} changedLines={changedLines} applied={applied} patchAppliedAt={patchAppliedAt} selectedModel={selectedModel} selectedSkill={selectedSkill} copiedCommand={copiedCommand} commandRun={commandRun} auditEvents={auditEvents} settings={settings} settingsSavedAt={settingsSavedAt} filePreview={filePreview} isReadingFile={isReadingFile} agentItems={agentItems} onApply={handleApplyPatch} onSkillSelect={handleSkillSelect} onCopyCommand={handleCopyCommand} onSimulateCommand={handleSimulateCommand} onModelChange={setSelectedModel} onSettingChange={handleSettingChange} onResetSettings={handleResetSettings} />
             <AiPanel activeTab={activeTab} prompt={prompt} selectedSkill={selectedSkill} runState={runState} agentItems={agentItems} onPromptChange={setPrompt} onTabChange={setActiveTab} onSkillSelect={handleSkillSelect} onRunPrompt={handleRunPrompt} />
           </section>
 
@@ -366,9 +433,12 @@ function EditorPanel({
   activeSection,
   changedLines,
   applied,
+  patchAppliedAt,
   selectedModel,
   selectedSkill,
   copiedCommand,
+  commandRun,
+  auditEvents,
   settings,
   settingsSavedAt,
   filePreview,
@@ -377,6 +447,7 @@ function EditorPanel({
   onApply,
   onSkillSelect,
   onCopyCommand,
+  onSimulateCommand,
   onModelChange,
   onSettingChange,
   onResetSettings,
@@ -385,9 +456,12 @@ function EditorPanel({
   activeSection: NavSection;
   changedLines: number;
   applied: boolean;
+  patchAppliedAt: string | null;
   selectedModel: string;
   selectedSkill: Skill;
   copiedCommand: string | null;
+  commandRun: CommandRun;
+  auditEvents: AuditEvent[];
   settings: AppSettings;
   settingsSavedAt: string;
   filePreview: FilePreview | null;
@@ -396,6 +470,7 @@ function EditorPanel({
   onApply: () => void;
   onSkillSelect: (skill: Skill) => void;
   onCopyCommand: (command: string) => void;
+  onSimulateCommand: (command: string) => void;
   onModelChange: (model: string) => void;
   onSettingChange: SettingChangeHandler;
   onResetSettings: () => void;
@@ -420,19 +495,19 @@ function EditorPanel({
       {activeSection === 'skills' ? (
         <SkillsView selectedSkill={selectedSkill} onSkillSelect={onSkillSelect} />
       ) : activeSection === 'commands' ? (
-        <CommandsView copiedCommand={copiedCommand} onCopyCommand={onCopyCommand} />
+        <CommandsView copiedCommand={copiedCommand} commandRun={commandRun} auditEvents={auditEvents} onCopyCommand={onCopyCommand} onSimulateCommand={onSimulateCommand} />
       ) : activeSection === 'settings' ? (
         <SettingsView selectedModel={selectedModel} settings={settings} savedAt={settingsSavedAt} onModelChange={onModelChange} onSettingChange={onSettingChange} onReset={onResetSettings} />
       ) : activeSection === 'agents' ? (
         <AgentOverview agentItems={agentItems} />
       ) : (
-        <DiffWorkspace activeSection={activeSection} applied={applied} filePreview={filePreview} isReadingFile={isReadingFile} onApply={onApply} onCopyCommand={onCopyCommand} />
+        <DiffWorkspace activeSection={activeSection} applied={applied} patchAppliedAt={patchAppliedAt} filePreview={filePreview} isReadingFile={isReadingFile} onApply={onApply} onCopyCommand={onCopyCommand} />
       )}
     </section>
   );
 }
 
-function DiffWorkspace({ activeSection, applied, filePreview, isReadingFile, onApply, onCopyCommand }: { activeSection: NavSection; applied: boolean; filePreview: FilePreview | null; isReadingFile: boolean; onApply: () => void; onCopyCommand: (command: string) => void }) {
+function DiffWorkspace({ activeSection, applied, patchAppliedAt, filePreview, isReadingFile, onApply, onCopyCommand }: { activeSection: NavSection; applied: boolean; patchAppliedAt: string | null; filePreview: FilePreview | null; isReadingFile: boolean; onApply: () => void; onCopyCommand: (command: string) => void }) {
   const title = activeSection === 'diff' ? 'Diff Review' : 'Workspace Preview';
   const previewContent = filePreview?.content || codePreview;
 
@@ -448,7 +523,7 @@ function DiffWorkspace({ activeSection, applied, filePreview, isReadingFile, onA
           {applied ? (
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-xs text-emerald-200">
               <Check size={13} />
-              Applied
+              Applied {patchAppliedAt ? `· ${patchAppliedAt}` : ''}
             </span>
           ) : null}
         </div>
@@ -460,6 +535,11 @@ function DiffWorkspace({ activeSection, applied, filePreview, isReadingFile, onA
             </div>
           ))}
         </div>
+        {applied ? (
+          <div className="mt-4 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-100">
+            Patch accepted in local preview. Audit trail updated and rollback remains available through Git diff.
+          </div>
+        ) : null}
         <div className="mt-4 flex gap-3">
           <button onClick={() => onCopyCommand('git diff -- src/pages/Login.tsx')} className="flex-1 rounded-xl border border-borderSoft bg-white/5 px-4 py-2 text-sm text-slate-300 hover:bg-white/10">
             Copy Patch
@@ -499,13 +579,13 @@ function SkillsView({ selectedSkill, onSkillSelect }: { selectedSkill: Skill; on
   );
 }
 
-function CommandsView({ copiedCommand, onCopyCommand }: { copiedCommand: string | null; onCopyCommand: (command: string) => void }) {
+function CommandsView({ copiedCommand, commandRun, auditEvents, onCopyCommand, onSimulateCommand }: { copiedCommand: string | null; commandRun: CommandRun; auditEvents: AuditEvent[]; onCopyCommand: (command: string) => void; onSimulateCommand: (command: string) => void }) {
   return (
     <div className="custom-scroll min-h-0 overflow-auto p-5">
       <div className="mb-4 grid grid-cols-3 gap-3">
-        <StatusCard icon={<TerminalSquare size={17} />} title="Mode" value="Copy command first" />
+        <StatusCard icon={<TerminalSquare size={17} />} title="Mode" value="Dry-run sandbox" />
         <StatusCard icon={<ShieldCheck size={17} />} title="Safety" value="No auto execution" />
-        <StatusCard icon={<Play size={17} />} title="Demo" value="Ready for preview" />
+        <StatusCard icon={<Play size={17} />} title="Status" value={commandRun.status} />
       </div>
       <div className="space-y-3">
         {commandSuggestions.map((item) => (
@@ -514,12 +594,39 @@ function CommandsView({ copiedCommand, onCopyCommand }: { copiedCommand: string 
               <div className="font-mono text-sm text-sky-100">{item.command}</div>
               <p className="mt-1 text-xs text-slate-500">{item.reason}</p>
             </div>
-            <button onClick={() => onCopyCommand(item.command)} className="inline-flex items-center gap-2 rounded-xl border border-borderSoft bg-white/5 px-3 py-2 text-sm text-slate-300 hover:bg-white/10">
-              <Clipboard size={15} />
-              {copiedCommand === item.command ? 'Copied' : 'Copy'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={() => onCopyCommand(item.command)} className="inline-flex items-center gap-2 rounded-xl border border-borderSoft bg-white/5 px-3 py-2 text-sm text-slate-300 hover:bg-white/10">
+                <Clipboard size={15} />
+                {copiedCommand === item.command ? 'Copied' : 'Copy'}
+              </button>
+              <button onClick={() => onSimulateCommand(item.command)} className="inline-flex items-center gap-2 rounded-xl bg-sky-400 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-300">
+                <Play size={15} />
+                Dry Run
+              </button>
+            </div>
           </div>
         ))}
+      </div>
+      <div className="mt-4 grid grid-cols-[1fr_0.85fr] gap-4">
+        <div className="rounded-2xl border border-borderSoft bg-black/35 p-4">
+          <PanelTitle title={commandRun.command || 'Command Output'} subtitle="simulated terminal feedback" />
+          <div className="mt-3 space-y-2 font-mono text-xs leading-5 text-slate-400">
+            {commandRun.output.map((line) => (
+              <div key={line}>{line}</div>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-borderSoft bg-black/25 p-4">
+          <PanelTitle title="Audit Trail" subtitle="last safety events" />
+          <div className="mt-3 space-y-2">
+            {auditEvents.map((event) => (
+              <div key={`${event.time}-${event.title}-${event.detail}`} className="rounded-xl bg-white/[0.03] p-3">
+                <div className={`text-xs ${event.tone === 'emerald' ? 'text-emerald-300' : event.tone === 'amber' ? 'text-amber-300' : event.tone === 'sky' ? 'text-sky-300' : 'text-slate-400'}`}>{event.time} · {event.title}</div>
+                <div className="mt-1 truncate text-xs text-slate-500">{event.detail}</div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -765,6 +872,10 @@ function loadSettings(): AppSettings {
   } catch {
     return defaultSettings;
   }
+}
+
+function formatClock() {
+  return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date());
 }
 
 function buildAgentStates(runState: DemoRunState): DemoAgent[] {
