@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Bot, Check, ChevronRight, Circle, Clipboard, Code2, File, Folder, GitCompareArrows, KeyRound, Layers3, Loader2, MessageSquareText, MonitorPlay, Play, Rocket, Search, Send, Settings2, ShieldCheck, Sparkles, TerminalSquare, Zap } from 'lucide-react';
-import { agents, codePreview, commandSuggestions, demoTree, diffPreview, modelOptions, navItems, skills, taskLogs, type NavSection, type TreeNode } from './data';
+import { agents, codePreview, commandSuggestions, demoTree, diffPreview, modelOptions, navItems, skills, taskLogs, type AgentState, type NavSection, type TreeNode } from './data';
 
 type Project = {
   name: string;
@@ -20,6 +20,15 @@ type SearchResult = {
   filePath: string;
   line: number;
   preview: string;
+};
+
+type DemoRunState = 'idle' | 'planning' | 'engineering' | 'reviewing' | 'done';
+
+type DemoAgent = {
+  name: string;
+  state: AgentState;
+  summary: string;
+  output: string;
 };
 
 type AppSettings = {
@@ -67,8 +76,12 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState('login');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [runState, setRunState] = useState<DemoRunState>('idle');
+  const [runStartedAt, setRunStartedAt] = useState<string | null>(null);
 
   const changedLines = useMemo(() => diffPreview.filter((line) => line.type !== 'same').length, []);
+  const agentItems = useMemo(() => buildAgentStates(runState), [runState]);
+  const timelineItems = useMemo(() => buildTimeline(runState, runStartedAt, applied), [runState, runStartedAt, applied]);
 
   useEffect(() => {
     window.localStorage.setItem(settingsStorageKey, JSON.stringify(settings));
@@ -78,6 +91,16 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem(modelStorageKey, selectedModel);
   }, [selectedModel]);
+
+  useEffect(() => {
+    const nextState = runState === 'planning' ? 'engineering' : runState === 'engineering' ? 'reviewing' : runState === 'reviewing' ? 'done' : null;
+    if (!nextState) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => setRunState(nextState), 950);
+    return () => window.clearTimeout(timer);
+  }, [runState]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -141,6 +164,19 @@ export function App() {
     void navigator.clipboard?.writeText(command);
   }
 
+  function handleRunPrompt() {
+    setApplied(false);
+    setRunStartedAt(new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date()));
+    setActiveTab('agent');
+    setActiveSection('agents');
+    setRunState('planning');
+  }
+
+  function handleApplyPatch() {
+    setApplied(true);
+    setRunState('done');
+  }
+
   function handleSettingChange<Key extends keyof AppSettings>(key: Key, value: AppSettings[Key]) {
     setSettings((currentSettings) => ({
       ...currentSettings,
@@ -185,11 +221,11 @@ export function App() {
 
           <section className="grid min-h-0 flex-1 grid-cols-[300px_minmax(420px,1fr)_390px] gap-4 p-4">
             <FileExplorer project={project} activeFile={activeFile} searchQuery={searchQuery} searchResults={searchResults} isSearching={isSearching} onSelectFile={setActiveFile} onSearchQueryChange={setSearchQuery} onSearch={handleProjectSearch} />
-            <EditorPanel activeFile={activeFile} activeSection={activeSection} changedLines={changedLines} applied={applied} selectedModel={selectedModel} selectedSkill={selectedSkill} copiedCommand={copiedCommand} settings={settings} settingsSavedAt={settingsSavedAt} filePreview={filePreview} isReadingFile={isReadingFile} onApply={() => setApplied(true)} onSkillSelect={handleSkillSelect} onCopyCommand={handleCopyCommand} onModelChange={setSelectedModel} onSettingChange={handleSettingChange} onResetSettings={handleResetSettings} />
-            <AiPanel activeTab={activeTab} prompt={prompt} selectedSkill={selectedSkill} onPromptChange={setPrompt} onTabChange={setActiveTab} onSkillSelect={handleSkillSelect} />
+            <EditorPanel activeFile={activeFile} activeSection={activeSection} changedLines={changedLines} applied={applied} selectedModel={selectedModel} selectedSkill={selectedSkill} copiedCommand={copiedCommand} settings={settings} settingsSavedAt={settingsSavedAt} filePreview={filePreview} isReadingFile={isReadingFile} agentItems={agentItems} onApply={handleApplyPatch} onSkillSelect={handleSkillSelect} onCopyCommand={handleCopyCommand} onModelChange={setSelectedModel} onSettingChange={handleSettingChange} onResetSettings={handleResetSettings} />
+            <AiPanel activeTab={activeTab} prompt={prompt} selectedSkill={selectedSkill} runState={runState} agentItems={agentItems} onPromptChange={setPrompt} onTabChange={setActiveTab} onSkillSelect={handleSkillSelect} onRunPrompt={handleRunPrompt} />
           </section>
 
-          <BottomTimeline copiedCommand={copiedCommand} onCopyCommand={handleCopyCommand} />
+          <BottomTimeline copiedCommand={copiedCommand} timelineItems={timelineItems} runState={runState} onCopyCommand={handleCopyCommand} />
         </main>
       </div>
     </div>
@@ -337,6 +373,7 @@ function EditorPanel({
   settingsSavedAt,
   filePreview,
   isReadingFile,
+  agentItems,
   onApply,
   onSkillSelect,
   onCopyCommand,
@@ -355,6 +392,7 @@ function EditorPanel({
   settingsSavedAt: string;
   filePreview: FilePreview | null;
   isReadingFile: boolean;
+  agentItems: DemoAgent[];
   onApply: () => void;
   onSkillSelect: (skill: Skill) => void;
   onCopyCommand: (command: string) => void;
@@ -386,7 +424,7 @@ function EditorPanel({
       ) : activeSection === 'settings' ? (
         <SettingsView selectedModel={selectedModel} settings={settings} savedAt={settingsSavedAt} onModelChange={onModelChange} onSettingChange={onSettingChange} onReset={onResetSettings} />
       ) : activeSection === 'agents' ? (
-        <AgentOverview />
+        <AgentOverview agentItems={agentItems} />
       ) : (
         <DiffWorkspace activeSection={activeSection} applied={applied} filePreview={filePreview} isReadingFile={isReadingFile} onApply={onApply} onCopyCommand={onCopyCommand} />
       )}
@@ -541,7 +579,7 @@ function SettingsView({
   );
 }
 
-function AgentOverview() {
+function AgentOverview({ agentItems }: { agentItems: DemoAgent[] }) {
   return (
     <div className="custom-scroll min-h-0 overflow-auto p-5">
       <div className="mb-4 grid grid-cols-3 gap-3">
@@ -549,7 +587,7 @@ function AgentOverview() {
         <StatusCard icon={<Layers3 size={17} />} title="References" value="3 file paths" />
         <StatusCard icon={<GitCompareArrows size={17} />} title="Patch Scope" value="single file" />
       </div>
-      <AgentRun expanded />
+      <AgentRun agentItems={agentItems} expanded />
     </div>
   );
 }
@@ -558,16 +596,22 @@ function AiPanel({
   activeTab,
   prompt,
   selectedSkill,
+  runState,
+  agentItems,
   onPromptChange,
   onTabChange,
   onSkillSelect,
+  onRunPrompt,
 }: {
   activeTab: 'chat' | 'agent';
   prompt: string;
   selectedSkill: Skill;
+  runState: DemoRunState;
+  agentItems: DemoAgent[];
   onPromptChange: (prompt: string) => void;
   onTabChange: (tab: 'chat' | 'agent') => void;
   onSkillSelect: (skill: Skill) => void;
+  onRunPrompt: () => void;
 }) {
   return (
     <section className="grid min-h-0 grid-rows-[auto_1fr_auto] rounded-3xl border border-borderSoft bg-panel/80 shadow-2xl backdrop-blur-xl">
@@ -582,15 +626,16 @@ function AiPanel({
       </div>
 
       <div className="custom-scroll min-h-0 overflow-auto p-4">
-        {activeTab === 'agent' ? <AgentRun /> : <ChatRun selectedSkill={selectedSkill} onSkillSelect={onSkillSelect} />}
+        {activeTab === 'agent' ? <AgentRun agentItems={agentItems} /> : <ChatRun selectedSkill={selectedSkill} onSkillSelect={onSkillSelect} />}
       </div>
 
       <div className="border-t border-borderSoft p-4">
         <div className="flex items-center gap-2 rounded-2xl border border-borderSoft bg-black/25 px-3 py-2">
           <MessageSquareText size={17} className="text-slate-500" />
           <input value={prompt} onChange={(event) => onPromptChange(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-600" placeholder="Ask Crow6 to build, explain, or modify..." />
-          <button className="rounded-xl bg-sky-400 p-2 text-slate-950">
+          <button onClick={onRunPrompt} className="inline-flex items-center gap-2 rounded-xl bg-sky-400 px-3 py-2 text-sm font-semibold text-slate-950">
             <Send size={15} />
+            {runState === 'planning' || runState === 'engineering' || runState === 'reviewing' ? 'Running' : 'Run'}
           </button>
         </div>
       </div>
@@ -598,10 +643,10 @@ function AiPanel({
   );
 }
 
-function AgentRun({ expanded = false }: { expanded?: boolean }) {
+function AgentRun({ agentItems, expanded = false }: { agentItems: DemoAgent[]; expanded?: boolean }) {
   return (
     <div className="space-y-3">
-      {agents.map((agent) => (
+      {agentItems.map((agent) => (
         <div key={agent.name} className="rounded-2xl border border-borderSoft bg-white/[0.03] p-4">
           <div className="mb-2 flex items-center justify-between">
             <div className="flex items-center gap-2 font-medium">
@@ -643,13 +688,14 @@ function ChatRun({ selectedSkill, onSkillSelect }: { selectedSkill: Skill; onSki
   );
 }
 
-function BottomTimeline({ copiedCommand, onCopyCommand }: { copiedCommand: string | null; onCopyCommand: (command: string) => void }) {
+function BottomTimeline({ copiedCommand, timelineItems, runState, onCopyCommand }: { copiedCommand: string | null; timelineItems: typeof taskLogs; runState: DemoRunState; onCopyCommand: (command: string) => void }) {
   const command = copiedCommand ?? commandSuggestions[0].command;
+  const runLabel = runState === 'idle' ? 'idle' : runState === 'done' ? 'done' : 'running';
 
   return (
     <footer className="grid h-24 grid-cols-[1.2fr_1fr_1fr] gap-4 border-t border-borderSoft bg-panel/70 px-4 py-3 backdrop-blur-xl">
-      <StatusCard icon={<Bot size={17} />} title="Task Timeline" value={taskLogs.map((log) => log.title).join(' → ')} />
-      <StatusCard icon={<Sparkles size={17} />} title="Skills" value="Code Review, UI Polish, Generate Tests" />
+      <StatusCard icon={<Bot size={17} />} title={`Task Timeline · ${runLabel}`} value={timelineItems.map((log) => log.title).join(' → ')} />
+      <StatusCard icon={<Sparkles size={17} />} title="Skills" value={runState === 'done' ? 'Patch ready for apply' : 'Code Review, UI Polish, Generate Tests'} />
       <button onClick={() => onCopyCommand(command)} className="rounded-2xl border border-borderSoft bg-black/20 px-4 py-3 text-left hover:bg-white/[0.04]">
         <div className="mb-1 flex items-center gap-2 text-xs text-slate-500">
           <ChevronRight size={17} />
@@ -719,6 +765,67 @@ function loadSettings(): AppSettings {
   } catch {
     return defaultSettings;
   }
+}
+
+function buildAgentStates(runState: DemoRunState): DemoAgent[] {
+  const runningAgentByState: Record<DemoRunState, string | null> = {
+    idle: 'Engineer',
+    planning: 'Planner',
+    engineering: 'Engineer',
+    reviewing: 'Reviewer',
+    done: null,
+  };
+  const order = ['Planner', 'Codebase', 'Engineer', 'Reviewer', 'Tester'];
+  const runningAgent = runningAgentByState[runState];
+
+  return agents.map((agent) => {
+    if (runState === 'done') {
+      return {
+        ...agent,
+        state: 'done',
+        summary: agent.name === 'Tester' ? '生成手动验证清单，等待用户应用 patch。' : agent.summary,
+      };
+    }
+
+    if (runState === 'idle') {
+      return agent;
+    }
+
+    const agentIndex = order.indexOf(agent.name);
+    const runningIndex = runningAgent ? order.indexOf(runningAgent) : -1;
+    const state: AgentState = agent.name === runningAgent ? 'running' : agentIndex < runningIndex ? 'done' : 'waiting';
+
+    return {
+      ...agent,
+      state,
+    };
+  });
+}
+
+function buildTimeline(runState: DemoRunState, startedAt: string | null, applied: boolean): typeof taskLogs {
+  if (runState === 'idle') {
+    return taskLogs;
+  }
+
+  const startTime = startedAt ?? '00:00:00';
+  const items = [
+    { time: startTime, title: 'Task accepted', detail: 'Prompt captured and routed to the local agent state machine.' },
+    { time: '+00:01', title: 'Planning', detail: 'Planner decomposes intent and identifies target files.' },
+  ];
+
+  if (runState === 'engineering' || runState === 'reviewing' || runState === 'done') {
+    items.push({ time: '+00:02', title: 'Patch generated', detail: 'Engineer prepared focused local diff preview.' });
+  }
+
+  if (runState === 'reviewing' || runState === 'done') {
+    items.push({ time: '+00:03', title: 'Review completed', detail: 'Reviewer checked rollback safety and UI risk.' });
+  }
+
+  if (runState === 'done') {
+    items.push({ time: '+00:04', title: applied ? 'Applied locally' : 'Ready to apply', detail: applied ? 'Patch marked as applied in workspace.' : 'Waiting for user confirmation before modifying files.' });
+  }
+
+  return items;
 }
 
 function isAbsolutePath(filePath: string) {
