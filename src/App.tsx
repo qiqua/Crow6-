@@ -22,6 +22,29 @@ type SearchResult = {
   preview: string;
 };
 
+type AppSettings = {
+  apiBaseUrl: string;
+  apiKeySource: string;
+  temperature: string;
+  safeMode: boolean;
+  copyBeforeRun: boolean;
+  streamResponses: boolean;
+};
+
+type SettingChangeHandler = <Key extends keyof AppSettings>(key: Key, value: AppSettings[Key]) => void;
+
+const settingsStorageKey = 'crow6:settings';
+const modelStorageKey = 'crow6:selected-model';
+
+const defaultSettings: AppSettings = {
+  apiBaseUrl: 'https://api.openai-compatible.local/v1',
+  apiKeySource: 'Environment variable: OPENAI_API_KEY',
+  temperature: '0.2',
+  safeMode: true,
+  copyBeforeRun: true,
+  streamResponses: true,
+};
+
 export function App() {
   const [project, setProject] = useState<Project>({
     name: 'Crow6 Demo Workspace',
@@ -32,11 +55,13 @@ export function App() {
   const [activeTab, setActiveTab] = useState<'chat' | 'agent'>('agent');
   const [activeSection, setActiveSection] = useState<NavSection>('workspace');
   const [isOpening, setIsOpening] = useState(false);
-  const [selectedModel, setSelectedModel] = useState(modelOptions[0]);
+  const [selectedModel, setSelectedModel] = useState(loadSelectedModel);
   const [selectedSkill, setSelectedSkill] = useState(skills[1]);
   const [prompt, setPrompt] = useState('把登录页面改成现代 SaaS 风格，并增加 loading 状态。');
   const [applied, setApplied] = useState(false);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+  const [settings, setSettings] = useState<AppSettings>(loadSettings);
+  const [settingsSavedAt, setSettingsSavedAt] = useState('saved locally');
   const [filePreview, setFilePreview] = useState<FilePreview | null>(null);
   const [isReadingFile, setIsReadingFile] = useState(false);
   const [searchQuery, setSearchQuery] = useState('login');
@@ -44,6 +69,15 @@ export function App() {
   const [isSearching, setIsSearching] = useState(false);
 
   const changedLines = useMemo(() => diffPreview.filter((line) => line.type !== 'same').length, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(settingsStorageKey, JSON.stringify(settings));
+    setSettingsSavedAt(new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date()));
+  }, [settings]);
+
+  useEffect(() => {
+    window.localStorage.setItem(modelStorageKey, selectedModel);
+  }, [selectedModel]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -107,6 +141,18 @@ export function App() {
     void navigator.clipboard?.writeText(command);
   }
 
+  function handleSettingChange<Key extends keyof AppSettings>(key: Key, value: AppSettings[Key]) {
+    setSettings((currentSettings) => ({
+      ...currentSettings,
+      [key]: value,
+    }));
+  }
+
+  function handleResetSettings() {
+    setSelectedModel(modelOptions[0]);
+    setSettings(defaultSettings);
+  }
+
   async function handleProjectSearch() {
     if (!window.crow6 || !isAbsolutePath(project.path)) {
       setSearchResults([
@@ -139,7 +185,7 @@ export function App() {
 
           <section className="grid min-h-0 flex-1 grid-cols-[300px_minmax(420px,1fr)_390px] gap-4 p-4">
             <FileExplorer project={project} activeFile={activeFile} searchQuery={searchQuery} searchResults={searchResults} isSearching={isSearching} onSelectFile={setActiveFile} onSearchQueryChange={setSearchQuery} onSearch={handleProjectSearch} />
-            <EditorPanel activeFile={activeFile} activeSection={activeSection} changedLines={changedLines} applied={applied} selectedModel={selectedModel} selectedSkill={selectedSkill} copiedCommand={copiedCommand} filePreview={filePreview} isReadingFile={isReadingFile} onApply={() => setApplied(true)} onSkillSelect={handleSkillSelect} onCopyCommand={handleCopyCommand} />
+            <EditorPanel activeFile={activeFile} activeSection={activeSection} changedLines={changedLines} applied={applied} selectedModel={selectedModel} selectedSkill={selectedSkill} copiedCommand={copiedCommand} settings={settings} settingsSavedAt={settingsSavedAt} filePreview={filePreview} isReadingFile={isReadingFile} onApply={() => setApplied(true)} onSkillSelect={handleSkillSelect} onCopyCommand={handleCopyCommand} onModelChange={setSelectedModel} onSettingChange={handleSettingChange} onResetSettings={handleResetSettings} />
             <AiPanel activeTab={activeTab} prompt={prompt} selectedSkill={selectedSkill} onPromptChange={setPrompt} onTabChange={setActiveTab} onSkillSelect={handleSkillSelect} />
           </section>
 
@@ -287,11 +333,16 @@ function EditorPanel({
   selectedModel,
   selectedSkill,
   copiedCommand,
+  settings,
+  settingsSavedAt,
   filePreview,
   isReadingFile,
   onApply,
   onSkillSelect,
   onCopyCommand,
+  onModelChange,
+  onSettingChange,
+  onResetSettings,
 }: {
   activeFile: string;
   activeSection: NavSection;
@@ -300,11 +351,16 @@ function EditorPanel({
   selectedModel: string;
   selectedSkill: Skill;
   copiedCommand: string | null;
+  settings: AppSettings;
+  settingsSavedAt: string;
   filePreview: FilePreview | null;
   isReadingFile: boolean;
   onApply: () => void;
   onSkillSelect: (skill: Skill) => void;
   onCopyCommand: (command: string) => void;
+  onModelChange: (model: string) => void;
+  onSettingChange: SettingChangeHandler;
+  onResetSettings: () => void;
 }) {
   return (
     <section className="grid min-h-0 grid-rows-[auto_1fr] rounded-3xl border border-borderSoft bg-panel/80 shadow-2xl backdrop-blur-xl">
@@ -328,7 +384,7 @@ function EditorPanel({
       ) : activeSection === 'commands' ? (
         <CommandsView copiedCommand={copiedCommand} onCopyCommand={onCopyCommand} />
       ) : activeSection === 'settings' ? (
-        <SettingsView selectedModel={selectedModel} />
+        <SettingsView selectedModel={selectedModel} settings={settings} savedAt={settingsSavedAt} onModelChange={onModelChange} onSettingChange={onSettingChange} onReset={onResetSettings} />
       ) : activeSection === 'agents' ? (
         <AgentOverview />
       ) : (
@@ -431,20 +487,54 @@ function CommandsView({ copiedCommand, onCopyCommand }: { copiedCommand: string 
   );
 }
 
-function SettingsView({ selectedModel }: { selectedModel: string }) {
+function SettingsView({
+  selectedModel,
+  settings,
+  savedAt,
+  onModelChange,
+  onSettingChange,
+  onReset,
+}: {
+  selectedModel: string;
+  settings: AppSettings;
+  savedAt: string;
+  onModelChange: (model: string) => void;
+  onSettingChange: SettingChangeHandler;
+  onReset: () => void;
+}) {
   return (
     <div className="custom-scroll min-h-0 overflow-auto p-5">
       <div className="mb-4 grid grid-cols-3 gap-3">
         <StatusCard icon={<KeyRound size={17} />} title="Provider" value="OpenAI-compatible" />
         <StatusCard icon={<Zap size={17} />} title="Model" value={selectedModel} />
-        <StatusCard icon={<MonitorPlay size={17} />} title="Mode" value="Local Alpha" />
+        <StatusCard icon={<MonitorPlay size={17} />} title="Saved" value={savedAt} />
       </div>
       <div className="rounded-3xl border border-borderSoft bg-black/25 p-5">
-        <PanelTitle title="Model Settings" subtitle="demo-ready local configuration" />
-        <div className="mt-5 space-y-4">
-          <Field label="API Base URL" value="https://api.openai-compatible.local/v1" />
-          <Field label="API Key" value="••••••••••••••••••••••" />
-          <Field label="Model Name" value={selectedModel} />
+        <div className="flex items-start justify-between gap-4">
+          <PanelTitle title="Model Settings" subtitle="persisted in localStorage for desktop demo" />
+          <button onClick={onReset} className="rounded-xl border border-borderSoft bg-white/5 px-3 py-2 text-sm text-slate-300 hover:bg-white/10">
+            Reset
+          </button>
+        </div>
+        <div className="mt-5 grid grid-cols-2 gap-4">
+          <Field label="API Base URL" value={settings.apiBaseUrl} onChange={(value) => onSettingChange('apiBaseUrl', value)} />
+          <Field label="API Key Source" value={settings.apiKeySource} onChange={(value) => onSettingChange('apiKeySource', value)} />
+          <label className="block">
+            <span className="mb-2 block text-xs text-slate-500">Model Name</span>
+            <select value={selectedModel} onChange={(event) => onModelChange(event.target.value)} className="w-full rounded-2xl border border-borderSoft bg-white/[0.04] px-4 py-3 text-sm text-slate-300 outline-none">
+              {modelOptions.map((model) => (
+                <option key={model} value={model} className="bg-slate-950">
+                  {model}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Field label="Temperature" value={settings.temperature} onChange={(value) => onSettingChange('temperature', value)} />
+        </div>
+        <div className="mt-5 grid grid-cols-3 gap-3">
+          <ToggleCard label="Safe Mode" enabled={settings.safeMode} onToggle={() => onSettingChange('safeMode', !settings.safeMode)} />
+          <ToggleCard label="Copy Before Run" enabled={settings.copyBeforeRun} onToggle={() => onSettingChange('copyBeforeRun', !settings.copyBeforeRun)} />
+          <ToggleCard label="Streaming Output" enabled={settings.streamResponses} onToggle={() => onSettingChange('streamResponses', !settings.streamResponses)} />
         </div>
       </div>
     </div>
@@ -589,13 +679,46 @@ function PanelTitle({ title, subtitle }: { title: string; subtitle: string }) {
   );
 }
 
-function Field({ label, value }: { label: string; value: string }) {
+function ToggleCard({ label, enabled, onToggle }: { label: string; enabled: boolean; onToggle: () => void }) {
+  return (
+    <button onClick={onToggle} className={`rounded-2xl border p-4 text-left transition ${enabled ? 'border-emerald-300/30 bg-emerald-400/10' : 'border-borderSoft bg-white/[0.03]'}`}>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-sm font-medium text-slate-200">{label}</span>
+        <span className={`h-3 w-3 rounded-full ${enabled ? 'bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.9)]' : 'bg-slate-600'}`} />
+      </div>
+      <p className="text-xs text-slate-500">{enabled ? 'Enabled' : 'Disabled'}</p>
+    </button>
+  );
+}
+
+function Field({ label, value, onChange }: { label: string; value: string; onChange?: (value: string) => void }) {
   return (
     <label className="block">
       <span className="mb-2 block text-xs text-slate-500">{label}</span>
-      <input value={value} readOnly className="w-full rounded-2xl border border-borderSoft bg-white/[0.04] px-4 py-3 text-sm text-slate-300 outline-none" />
+      <input value={value} readOnly={!onChange} onChange={(event) => onChange?.(event.target.value)} className="w-full rounded-2xl border border-borderSoft bg-white/[0.04] px-4 py-3 text-sm text-slate-300 outline-none" />
     </label>
   );
+}
+
+function loadSelectedModel() {
+  const storedModel = window.localStorage.getItem(modelStorageKey);
+  return storedModel && modelOptions.includes(storedModel) ? storedModel : modelOptions[0];
+}
+
+function loadSettings(): AppSettings {
+  try {
+    const storedSettings = window.localStorage.getItem(settingsStorageKey);
+    if (!storedSettings) {
+      return defaultSettings;
+    }
+
+    return {
+      ...defaultSettings,
+      ...JSON.parse(storedSettings),
+    };
+  } catch {
+    return defaultSettings;
+  }
 }
 
 function isAbsolutePath(filePath: string) {
